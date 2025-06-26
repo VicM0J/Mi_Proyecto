@@ -11,7 +11,8 @@ import {
   Settings, 
   LogOut,
   User,
-  FileEdit
+  FileEdit,
+  BarChart3
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -28,6 +29,18 @@ export function Sidebar({ onShowNotifications, onCreateOrder }: SidebarProps) {
   const { data: pendingTransfers = [] } = useQuery<any[]>({
     queryKey: ["/api/transfers/pending"],
     enabled: !!user,
+  });
+
+  const { data: repositionNotifications = [] } = useQuery({
+    queryKey: ["/api/repositions/notifications"],
+    enabled: !!user,
+    queryFn: async () => {
+      const res = await fetch('/api/repositions/notifications', {
+        credentials: 'include'
+      });
+      if (!res.ok) return [];
+      return await res.json();
+    },
   });
 
   const canCreateOrders = user?.area === 'corte' || user?.area === 'admin';
@@ -75,9 +88,6 @@ export function Sidebar({ onShowNotifications, onCreateOrder }: SidebarProps) {
             <a
                 href={`msteams:/l/chat/0/0?users=${user?.username}`}
             >
-            <button className="mt-2 px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
-              Chatear en Teams
-            </button>
             <button className="mt-2 px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
               Mi Reporte
             </button>
@@ -131,11 +141,19 @@ export function Sidebar({ onShowNotifications, onCreateOrder }: SidebarProps) {
           <li>
             <Button 
               variant="ghost" 
-              className={`w-full justify-start ${location === '/repositions' ? 'bg-primary text-white hover:bg-primary/90' : ''}`}
+              className={`w-full justify-start relative ${location === '/repositions' ? 'bg-primary text-white hover:bg-primary/90' : ''}`}
               onClick={() => setLocation('/repositions')}
             >
               <FileEdit className="mr-3 h-4 w-4" />
               Reposiciones
+              {repositionNotifications.length > 0 && (
+                <Badge 
+                  variant="destructive" 
+                  className="absolute -top-1 -right-1 h-5 w-5 flex items-center justify-center p-0 text-xs"
+                >
+                  {repositionNotifications.length}
+                </Badge>
+              )}
             </Button>
           </li>
           <li>
@@ -146,6 +164,16 @@ export function Sidebar({ onShowNotifications, onCreateOrder }: SidebarProps) {
             >
               <History className="mr-3 h-4 w-4" />
               Historial
+            </Button>
+          </li>
+          <li>
+             <Button 
+              variant="ghost" 
+              className={`w-full justify-start ${location === '/reports' ? 'bg-primary text-white hover:bg-primary/90' : ''}`}
+              onClick={() => setLocation('/reports')}
+            >
+              <BarChart3 className="mr-3 h-4 w-4" />
+              Reportes
             </Button>
           </li>
           {canCreateOrders && (

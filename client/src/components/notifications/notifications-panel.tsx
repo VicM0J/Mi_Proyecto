@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowRight, CheckCircle, Info, Clock, Bell } from "lucide-react";
+import { ArrowRight, CheckCircle, Info, Clock, Bell, Package, RefreshCw, Plus, X, XCircle, Trash2 } from "lucide-react";
 import { type Transfer } from "@shared/schema";
 import clsx from "clsx";
 
@@ -20,6 +20,15 @@ export function NotificationsPanel({ open, onClose }: NotificationsPanelProps) {
   const { data: pendingTransfers = [] } = useQuery<Transfer[]>({
     queryKey: ["/api/transfers/pending"],
     enabled: open,
+  });
+
+  const { data: repositionNotifications = [] } = useQuery({
+    queryKey: ["/api/repositions/notifications"],
+    enabled: open,
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/repositions/notifications");
+      return await res.json();
+    },
   });
 
   const acceptTransferMutation = useMutation({
@@ -96,6 +105,31 @@ export function NotificationsPanel({ open, onClose }: NotificationsPanelProps) {
     }
   };
 
+  const getNotificationIcon = (type: string) => {
+    switch (type) {
+      case 'transfer':
+        return <ArrowRight className="w-4 h-4 text-blue-600" />;
+      case 'order_completed':
+        return <CheckCircle className="w-4 h-4 text-green-600" />;
+      case 'order_created':
+        return <Plus className="w-4 h-4 text-purple-600" />;
+      case 'reposition_created':
+        return <Plus className="w-4 h-4 text-purple-600" />;
+      case 'reposition_approved':
+        return <CheckCircle className="w-4 h-4 text-green-600" />;
+      case 'reposition_rejected':
+        return <XCircle className="w-4 h-4 text-red-600" />;
+      case 'reposition_completed':
+        return <CheckCircle className="w-4 h-4 text-green-600" />;
+      case 'reposition_deleted':
+        return <Trash2 className="w-4 h-4 text-red-600" />;
+      case 'completion_approval_needed':
+        return <Clock className="w-4 h-4 text-yellow-600" />;
+      default:
+        return <Bell className="w-4 h-4 text-gray-600" />;
+    }
+  };
+
   return (
     <Sheet open={open} onOpenChange={onClose}>
       <SheetContent className="w-96 bg-white/60 backdrop-blur-lg border-l border-gray-200 dark:bg-gray-900/70 dark:border-gray-700 transition-all">
@@ -105,13 +139,52 @@ export function NotificationsPanel({ open, onClose }: NotificationsPanelProps) {
               <Bell className="text-indigo-600" size={20} />
               Notificaciones
             </div>
-            {pendingTransfers.length > 0 && (
-              <Badge variant="destructive">{pendingTransfers.length}</Badge>
+            {(pendingTransfers.length + repositionNotifications.length) > 0 && (
+              <Badge variant="destructive">{pendingTransfers.length + repositionNotifications.length}</Badge>
             )}
           </SheetTitle>
         </SheetHeader>
 
         <div className="mt-6 space-y-6 overflow-y-auto h-full pb-24 custom-scroll">
+          {repositionNotifications.length > 0 && (
+            <>
+              <p className="text-sm font-medium text-gray-500">Reposiciones</p>
+              {repositionNotifications.map((notification: any) => (
+                <div
+                  key={notification.id}
+                  className="bg-white/80 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-md rounded-xl p-4 transition-all duration-300 ease-out hover:shadow-xl animate-fade-in"
+                >
+                  <div className="flex items-start space-x-3">
+                    <div className="w-9 h-9 bg-purple-100 rounded-full flex items-center justify-center">
+                      {notification.type === 'transfer' ? (
+                        <ArrowRight className="text-purple-600" size={18} />
+                      ) : notification.type === 'approval' ? (
+                        <CheckCircle className="text-purple-600" size={18} />
+                      ) : (
+                        <RefreshCw className="text-purple-600" size={18} />
+                      )}
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="font-semibold text-gray-800 dark:text-gray-100">
+                        {notification.title}
+                      </h4>
+                      <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">
+                        {notification.message}
+                      </p>
+                      <div className="flex items-center justify-between mt-2">
+                        <Badge variant="outline" className="text-xs">
+                          {notification.folio}
+                        </Badge>
+                        <p className="text-xs text-gray-500">{formatDate(notification.createdAt)}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              <hr className="border-t border-gray-300 dark:border-gray-600" />
+            </>
+          )}
+
           {pendingTransfers.length > 0 && (
             <>
               <p className="text-sm font-medium text-gray-500">Transferencias Pendientes</p>
@@ -189,7 +262,7 @@ export function NotificationsPanel({ open, onClose }: NotificationsPanelProps) {
             </div>
           </div>
 
-          {pendingTransfers.length === 0 && (
+          {pendingTransfers.length === 0 && repositionNotifications.length === 0 && (
             <div className="text-center py-12 text-gray-500">
               <Clock size={48} className="mx-auto mb-4 text-gray-300" />
               <p>No hay notificaciones pendientes</p>

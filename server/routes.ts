@@ -19,6 +19,7 @@ export function registerRoutes(app: Express): Server {
   registerRepositionRoutes(app);
   registerAdminRoutes(app);
   registerDashboardRoutes(app);
+  registerReportsRoutes(app);
 
   const httpServer = configureWebSocket(app);
   return httpServer;
@@ -289,11 +290,13 @@ function registerDashboardRoutes(app: Express) {
       const allOrders = await storage.getOrders();
       const userAreaOrders = await storage.getOrders(user.area);
       const pendingTransfers = await storage.getPendingTransfersForUser(user.id);
+      const repositions = await storage.getRepositions(user.area, user.area);
 
       const stats = {
         activeOrders: allOrders.filter(o => o.status === 'active').length,
         myAreaOrders: userAreaOrders.length,
         pendingTransfers: pendingTransfers.length,
+        activeRepositions: repositions.filter(r => r.status !== 'completado' && r.status !== 'eliminado').length,
         completedToday: allOrders.filter(o =>
           o.status === 'completed' &&
           o.completedAt &&
@@ -305,6 +308,24 @@ function registerDashboardRoutes(app: Express) {
     } catch (error) {
       console.error('Get dashboard stats error:', error);
       res.status(500).json({ message: "Error al obtener estadísticas del tablero" });
+    }
+  });
+
+  app.get("/api/dashboard/recent-activity", async (req, res) => {
+    if (!req.isAuthenticated()) return res.status(401).json({ message: "Autenticación requerida" });
+
+    try {
+      const user = req.user!;
+      const recentOrders = await storage.getRecentOrders(user.area, 5);
+      const recentRepositions = await storage.getRecentRepositions(user.area, 5);
+
+      res.json({
+        orders: recentOrders,
+        repositions: recentRepositions
+      });
+    } catch (error) {
+      console.error('Get recent activity error:', error);
+      res.status(500).json({ message: "Error al obtener actividad reciente" });
     }
   });
 }
@@ -387,6 +408,9 @@ function registerRepositionRoutes(app: Express) {
 
     try {
       const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ message: "ID de reposición inválido" });
+      }
       const reposition = await storage.getRepositionById(id);
       if (!reposition) {
         return res.status(404).json({ message: "Reposición no encontrada" });
@@ -404,7 +428,24 @@ function registerRepositionRoutes(app: Express) {
     try {
       const user = req.user!;
       const repositionId = parseInt(req.params.id);
+      if (isNaN(repositionId)) {
+        return res.status(400).json({ message: "ID de reposición inválido" });
+      }
       const { toArea, notes } = req.body;
+
+      // Verificar que la reposición existe y está en estado válido
+      const reposition = await storage.getRepositionById(repositionId);
+      if (!reposition) {
+        return res.status(404).json({ message: "Reposición no encontrada" });
+      }
+
+      if (reposition.status !== 'aprobado') {
+        return res.status(400).json({ message: "Solo se pueden transferir reposiciones aprobadas" });
+      }
+
+      if (reposition.status === 'eliminado') {
+        return res.status(400).json({ message: "No se puede transferir una reposición eliminada" });
+      }
 
       const transfer = await storage.createRepositionTransfer({
         repositionId,
@@ -425,11 +466,14 @@ function registerRepositionRoutes(app: Express) {
 
     try {
       const user = req.user!;
-      if (user.area !== 'operaciones' && user.area !== 'admin') {
-        return res.status(403).json({ message: "Solo Operaciones o Administración pueden aprobar o rechazar" });
+      if (user.area !== 'operaciones' && user.area !== 'admin' && user.area !== 'envios') {
+        return res.status(403).json({ message: "Solo Operaciones, Administración o Envíos pueden aprobar o rechazar" });
       }
 
       const repositionId = parseInt(req.params.id);
+      if (isNaN(repositionId)) {
+        return res.status(400).json({ message: "ID de reposición inválido" });
+      }
       const { action, notes } = req.body;
 
       const result = await storage.approveReposition(repositionId, action, user.id, notes);
@@ -446,6 +490,9 @@ function registerRepositionRoutes(app: Express) {
     try {
       const user = req.user!;
       const transferId = parseInt(req.params.id);
+      if (isNaN(transferId)) {
+        return res.status(400).json({ message: "ID de transferencia inválido" });
+      }
       const { action } = req.body;
 
       const result = await storage.processRepositionTransfer(transferId, action, user.id);
@@ -461,6 +508,9 @@ function registerRepositionRoutes(app: Express) {
 
     try {
       const repositionId = parseInt(req.params.id);
+      if (isNaN(repositionId)) {
+        return res.status(400).json({ message: "ID de reposición inválido" });
+      }
       const history = await storage.getRepositionHistory(repositionId);
       res.json(history);
     } catch (error) {
@@ -469,6 +519,195 @@ function registerRepositionRoutes(app: Express) {
     }
   });
 
+  router.get("/:id/tracking", async (req, res) => {
+    if (!req.isAuthenticated()) return res.status(401).json({ message: "Autenticación requerida" });
+
+    try {
+      const repositionId = parseInt(req.params.id);
+      if (isNaN(repositionId)) {
+        return res.status(400).json({ message: "ID de reposición inválido" });
+      }
+      const tracking = await storage.getRepositionTracking(repositionId);
+      res.json(tracking);
+    } catch (error) {
+      console.error('Get reposition tracking error:', error);
+      res.status(500).json({ message: "Error al obtener seguimiento de la reposición" });
+    }
+  });
+
+  router.delete("/:id", async (req, res) => {
+    if (!req.isAuthenticated()) return res.status(401).json({ message: "Autenticación requerida" });
+
+    try {
+      const user = req.user!;
+      console.log('Delete request from user:', user.area, 'for reposition:', req.params.id);
+      
+      if (user.area !== 'admin' && user.area !== 'envios') {
+        return res.status(403).json({ message: "Solo Admin o Envíos pueden eliminar reposiciones" });
+      }
+
+      const repositionId = parseInt(req.params.id);
+      if (isNaN(repositionId)) {
+        return res.status(400).json({ message: "ID de reposición inválido" });
+      }
+      const { reason } = req.body;
+      
+      console.log('Delete request data:', { repositionId, reason });
+      
+      if (!reason || reason.trim().length === 0) {
+        return res.status(400).json({ message: "El motivo de eliminación es obligatorio" });
+      }
+
+      if (reason.trim().length < 10) {
+        return res.status(400).json({ message: "El motivo debe tener al menos 10 caracteres" });
+      }
+      
+      await storage.deleteReposition(repositionId, user.id, reason.trim());
+      console.log('Reposition deleted successfully:', repositionId);
+      res.json({ message: "Reposición eliminada correctamente" });
+    } catch (error) {
+      console.error('Delete reposition error:', error);
+      res.status(500).json({ message: "Error al eliminar reposición" });
+    }
+  });
+
+  router.post("/:id/complete", async (req, res) => {
+    if (!req.isAuthenticated()) return res.status(401).json({ message: "Autenticación requerida" });
+
+    try {
+      const user = req.user!;
+      const repositionId = parseInt(req.params.id);
+      if (isNaN(repositionId)) {
+        return res.status(400).json({ message: "ID de reposición inválido" });
+      }
+      const { notes } = req.body;
+
+      if (user.area === 'admin' || user.area === 'envios') {
+        // Admin y Envíos pueden finalizar directamente
+        await storage.completeReposition(repositionId, user.id, notes);
+        res.json({ message: "Reposición finalizada correctamente" });
+      } else {
+        // Otras áreas necesitan solicitar aprobación para finalizar
+        await storage.requestCompletionApproval(repositionId, user.id, notes);
+        res.json({ message: "Solicitud de finalización enviada a administración" });
+      }
+    } catch (error) {
+      console.error('Complete reposition error:', error);
+      res.status(500).json({ message: "Error al procesar solicitud de finalización" });
+    }
+  });
+
+  router.get("/all", async (req, res) => {
+    if (!req.isAuthenticated()) return res.status(401).json({ message: "Autenticación requerida" });
+
+    try {
+      const user = req.user!;
+      if (user.area !== 'admin' && user.area !== 'envios') {
+        return res.status(403).json({ message: "Solo administradores o envíos pueden ver el historial completo" });
+      }
+
+      const { includeDeleted } = req.query;
+      const repositions = await storage.getAllRepositions(includeDeleted === 'true');
+      res.json(repositions);
+    } catch (error) {
+      console.error('Get all repositions error:', error);
+      res.status(500).json({ message: "Error al obtener historial de reposiciones" });
+    }
+  });
+
+  router.get("/notifications", async (req, res) => {
+    if (!req.isAuthenticated()) return res.status(401).json({ message: "Autenticación requerida" });
+
+    try {
+      const user = req.user!;
+      const notifications = await storage.getRepositionNotifications(user.id, user.area);
+      res.json(notifications);
+    } catch (error) {
+      console.error('Get reposition notifications error:', error);
+      res.status(500).json({ message: "Error al obtener notificaciones de reposición" });
+    }
+  });
+
+  router.get("/transfers/pending", async (req, res) => {
+    if (!req.isAuthenticated()) return res.status(401).json({ message: "Autenticación requerida" });
+
+    try {
+      const user = req.user!;
+      const transfers = await storage.getPendingRepositionTransfers(user.area);
+      res.json(transfers);
+    } catch (error) {
+      console.error('Get pending reposition transfers error:', error);
+      res.status(500).json({ message: "Error al obtener transferencias pendientes" });
+    }
+  });
+
   app.use("/api/repositions", router);
+}
+
+function registerReportsRoutes(app: Express) {
+  const router = Router();
+
+  router.get("/data", async (req, res) => {
+    if (!req.isAuthenticated()) return res.status(401).json({ message: "Autenticación requerida" });
+
+    try {
+      const { type, startDate, endDate, area, status, urgency } = req.query;
+      const data = await storage.getReportData(
+        type as string,
+        startDate as string,
+        endDate as string,
+        { area: area as string, status: status as string, urgency: urgency as string }
+      );
+      res.json(data);
+    } catch (error) {
+      console.error('Get report data error:', error);
+      res.status(500).json({ message: "Error al obtener datos del reporte" });
+    }
+  });
+
+  router.get("/generate", async (req, res) => {
+    if (!req.isAuthenticated()) return res.status(401).json({ message: "Autenticación requerida" });
+
+    try {
+      const { type, format, startDate, endDate, area, status, urgency } = req.query;
+      const buffer = await storage.generateReport(
+        type as string,
+        format as string,
+        startDate as string,
+        endDate as string,
+        { area: area as string, status: status as string, urgency: urgency as string }
+      );
+      
+      const contentType = format === 'excel' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/pdf';
+      const filename = `reporte-${type}-${new Date().toISOString().split('T')[0]}.${format === 'excel' ? 'xlsx' : 'pdf'}`;
+      
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.send(buffer);
+    } catch (error) {
+      console.error('Generate report error:', error);
+      res.status(500).json({ message: "Error al generar reporte" });
+    }
+  });
+
+  router.post("/onedrive", async (req, res) => {
+    if (!req.isAuthenticated()) return res.status(401).json({ message: "Autenticación requerida" });
+
+    try {
+      const { type, startDate, endDate, area, status, urgency } = req.query;
+      const result = await storage.saveReportToOneDrive(
+        type as string,
+        startDate as string,
+        endDate as string,
+        { area: area as string, status: status as string, urgency: urgency as string }
+      );
+      res.json(result);
+    } catch (error) {
+      console.error('Save to OneDrive error:', error);
+      res.status(500).json({ message: "Error al guardar en OneDrive" });
+    }
+  });
+
+  app.use("/api/reports", router);
 }
 

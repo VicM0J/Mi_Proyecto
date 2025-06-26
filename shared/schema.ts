@@ -6,7 +6,7 @@ import { z } from "zod";
 export const areaEnum = pgEnum("area", ["patronaje", "corte", "bordado", "ensamble", "plancha", "calidad", "operaciones", "admin"]);
 export const repositionTypeEnum = pgEnum("reposition_type", ["repocision", "reproceso"]);
 export const urgencyEnum = pgEnum("urgency", ["urgente", "intermedio", "poco_urgente"]);
-export const repositionStatusEnum = pgEnum("reposition_status", ["pendiente", "aprobado", "rechazado", "en_proceso", "completado"]);
+export const repositionStatusEnum = pgEnum("reposition_status", ["pendiente", "aprobado", "rechazado", "en_proceso", "completado", "eliminado"]);
 export const orderStatusEnum = pgEnum("order_status", ["active", "completed"]);
 export const transferStatusEnum = pgEnum("transfer_status", ["pending", "accepted", "rejected"]);
 export const notificationTypeEnum = pgEnum("notification_type", ["transfer_request", "transfer_accepted", "transfer_rejected", "order_completed"]);
@@ -89,28 +89,28 @@ export const repositions = pgTable("repositions", {
   id: serial("id").primaryKey(),
   folio: text("folio").notNull().unique(),
   type: repositionTypeEnum("type").notNull(),
-  
+
   solicitanteNombre: text("solicitante_nombre").notNull(),
   solicitanteArea: areaEnum("solicitante_area").notNull(),
   fechaSolicitud: timestamp("fecha_solicitud").defaultNow().notNull(),
-  
+
   noSolicitud: text("no_solicitud").notNull(),
   noHoja: text("no_hoja"),
-  
+
   causanteDano: text("causante_dano").notNull(),
   descripcionSuceso: text("descripcion_suceso").notNull(),
-  
+
   modeloPrenda: text("modelo_prenda").notNull(),
   tela: text("tela").notNull(),
   color: text("color").notNull(),
   tipoPieza: text("tipo_pieza").notNull(),
-  
+
   urgencia: urgencyEnum("urgencia").notNull(),
   observaciones: text("observaciones"),
-  
+
   currentArea: areaEnum("current_area").notNull(),
   status: repositionStatusEnum("status").notNull().default("pendiente"),
-  
+
   createdBy: integer("created_by").notNull(),
   approvedBy: integer("approved_by"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -371,4 +371,4 @@ export type InsertAdminPassword = z.infer<typeof insertAdminPasswordSchema>;
 export type Area = "patronaje" | "corte" | "bordado" | "ensamble" | "plancha" | "calidad" | "operaciones" | "admin";
 export type RepositionType = "repocision" | "reproceso";
 export type Urgency = "urgente" | "intermedio" | "poco_urgente";
-export type RepositionStatus = "pendiente" | "aprobado" | "rechazado" | "en_proceso" | "completado";
+export type RepositionStatus = "pendiente" | "aprobado" | "rechazado" | "en_proceso" | "completado" | "eliminado";

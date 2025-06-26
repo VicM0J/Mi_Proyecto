@@ -1,4 +1,3 @@
-
 DO $$ 
 BEGIN
     -- Tipo ENUM: area
@@ -222,3 +221,13 @@ CREATE TABLE IF NOT EXISTS repositions (
     CONSTRAINT repositions_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id),
     CONSTRAINT repositions_approved_by_fkey FOREIGN KEY (approved_by) REFERENCES public.users(id)
 );
+
+
+ALTER TYPE reposition_status ADD VALUE 'eliminado';
+ALTER TABLE notifications
+ADD COLUMN reposition_id INTEGER REFERENCES repositions(id);
+CREATE INDEX IF NOT EXISTS idx_notifications_reposition_id ON notifications(reposition_id);
+ALTER TYPE notification_type ADD VALUE 'reposition_deleted';
+
+ALTER TYPE notification_type ADD VALUE 'new_reposition';
+ALTER TYPE reposition_status ADD VALUE 'rechazado';

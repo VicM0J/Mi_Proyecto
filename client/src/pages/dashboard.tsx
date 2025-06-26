@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Layout } from "@/components/layout/layout";
 import { StatsCards } from "@/components/dashboard/stats-cards";
+import { RecentActivity } from "@/components/dashboard/recent-activity";
 import { OrdersTable } from "@/components/orders/orders-table";
 import { TransferModal } from "@/components/orders/transfer-modal";
 import { OrderHistoryModal } from "@/components/orders/order-history-modal";
@@ -60,6 +61,12 @@ export default function Dashboard() {
 
       {/* Stats Cards */}
       <StatsCards />
+
+      {/* Recent Activity */}
+      <div className="mb-6">
+        <h3 className="text-lg font-semibold text-gray-800 mb-4">Actividad Reciente</h3>
+        <RecentActivity />
+      </div>
 
       {/* Orders Table */}
       <OrdersTable

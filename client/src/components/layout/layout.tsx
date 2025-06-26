@@ -3,6 +3,7 @@ import { Sidebar } from "./sidebar";
 import { CreateOrderModal } from "@/components/orders/create-order-modal";
 import { NotificationsPanel } from "@/components/notifications/notifications-panel";
 import { useAuth } from "@/hooks/use-auth";
+import { ReportsPanel } from "../reports/ReportsPanel";
 
 interface LayoutProps {
   children: ReactNode;
@@ -12,6 +13,7 @@ export function Layout({ children }: LayoutProps) {
   const { user } = useAuth();
   const [showCreateOrder, setShowCreateOrder] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [showReports, setShowReports] = useState(false);
 
   const canCreateOrders = user?.area === 'corte' || user?.area === 'admin';
 
@@ -20,8 +22,9 @@ export function Layout({ children }: LayoutProps) {
       <Sidebar 
         onShowNotifications={() => setShowNotifications(true)}
         onCreateOrder={() => setShowCreateOrder(true)}
+        onReportsClick={() => setShowReports(true)}
       />
-      
+
       <main className="flex-1 ml-64 p-6 overflow-y-auto">
         {children}
       </main>
@@ -37,6 +40,10 @@ export function Layout({ children }: LayoutProps) {
       <NotificationsPanel
         open={showNotifications}
         onClose={() => setShowNotifications(false)}
+      />
+      <ReportsPanel
+        open={showReports}
+        onClose={() => setShowReports(false)}
       />
     </div>
   );

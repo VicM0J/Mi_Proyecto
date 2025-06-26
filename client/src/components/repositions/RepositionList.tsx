@@ -4,9 +4,12 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Eye, ArrowRight, CheckCircle, XCircle, Clock } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
+import { Plus, Eye, ArrowRight, CheckCircle, XCircle, Clock, MapPin, Activity, Trash2, Flag, Bell } from 'lucide-react';
 import { RepositionForm } from './RepositionForm';
 import { RepositionDetail } from './RepositionDetail';
+import { RepositionTracker } from './RepositionTracker';
 import Swal from 'sweetalert2';
 
 interface Reposition {
@@ -24,7 +27,7 @@ interface Reposition {
 }
 
 const areas = [
-  'patronaje', 'corte', 'bordado', 'ensamble', 'plancha', 'calidad', 'operaciones', 'admin'
+  'patronaje', 'corte', 'bordado', 'ensamble', 'plancha', 'calidad', 'envios', 'operaciones', 'admin'
 ];
 
 const statusColors = {
@@ -32,7 +35,8 @@ const statusColors = {
   aprobado: 'bg-green-100 text-green-800',
   rechazado: 'bg-red-100 text-red-800',
   en_proceso: 'bg-blue-100 text-blue-800',
-  completado: 'bg-gray-100 text-gray-800'
+  completado: 'bg-gray-100 text-gray-800',
+  eliminado: 'bg-red-100 text-red-800'
 };
 
 const urgencyColors = {
@@ -44,17 +48,32 @@ const urgencyColors = {
 export function RepositionList({ userArea }: { userArea: string }) {
   const [showForm, setShowForm] = useState(false);
   const [selectedReposition, setSelectedReposition] = useState<number | null>(null);
+  const [trackedReposition, setTrackedReposition] = useState<number | null>(null);
   const [filterArea, setFilterArea] = useState<string>(userArea === 'admin' ? 'all' : userArea);
+  const [showHistory, setShowHistory] = useState(false);
+  const [includeDeleted, setIncludeDeleted] = useState(false);
   const queryClient = useQueryClient();
 
   const { data: repositions = [], isLoading } = useQuery({
-    queryKey: ['repositions', filterArea],
+    queryKey: ['repositions', filterArea, showHistory, includeDeleted],
     queryFn: async () => {
-      const url = (filterArea && filterArea !== 'all')
-  ? `/api/repositions?area=${filterArea}`
-  : '/api/repositions';
+      let url = showHistory && userArea === 'admin' 
+        ? `/api/repositions/all?includeDeleted=${includeDeleted}`
+        : (filterArea && filterArea !== 'all')
+          ? `/api/repositions?area=${filterArea}`
+          : '/api/repositions';
+
       const response = await fetch(url);
       if (!response.ok) throw new Error('Failed to fetch repositions');
+      return response.json();
+    }
+  });
+
+  const { data: pendingTransfers = [] } = useQuery({
+    queryKey: ['pending-reposition-transfers'],
+    queryFn: async () => {
+      const response = await fetch('/api/repositions/transfers/pending');
+      if (!response.ok) return [];
       return response.json();
     }
   });
@@ -95,6 +114,86 @@ export function RepositionList({ userArea }: { userArea: string }) {
       Swal.fire({
         title: '¡Éxito!',
         text: 'Solicitud procesada correctamente',
+        icon: 'success',
+        confirmButtonColor: '#8B5CF6'
+      });
+    }
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async ({ repositionId, reason }: { repositionId: number, reason: string }) => {
+      console.log('Deleting reposition:', repositionId, 'with reason:', reason);
+      const response = await fetch(`/api/repositions/${repositionId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      });
+
+      const data = await response.json();
+      console.log('Delete response:', response.status, data);
+
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to delete reposition');
+      }
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['repositions'] });
+      Swal.fire({
+        title: '¡Eliminada!',
+        text: 'Reposición eliminada correctamente',
+        icon: 'success',
+        confirmButtonColor: '#8B5CF6'
+      });
+    },
+    onError: (error: Error) => {
+      console.error('Delete error:', error);
+      Swal.fire({
+        title: 'Error',
+        text: error.message || 'No se pudo eliminar la reposición',
+        icon: 'error',
+        confirmButtonColor: '#8B5CF6'
+      });
+    }
+  });
+
+  const completeMutation = useMutation({
+    mutationFn: async ({ repositionId, notes }: { repositionId: number, notes?: string }) => {
+      const response = await fetch(`/api/repositions/${repositionId}/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes }),
+      });
+      if (!response.ok) throw new Error('Failed to complete reposition');
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['repositions'] });
+      Swal.fire({
+        title: '¡Éxito!',
+        text: 'Proceso completado correctamente',
+        icon: 'success',
+        confirmButtonColor: '#8B5CF6'
+      });
+    }
+  });
+
+  const processTransferMutation = useMutation({
+    mutationFn: async ({ transferId, action }: { transferId: number, action: 'accepted' | 'rejected' }) => {
+      const response = await fetch(`/api/repositions/transfers/${transferId}/process`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      if (!response.ok) throw new Error('Failed to process transfer');
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['repositions'] });
+      queryClient.invalidateQueries({ queryKey: ['pending-reposition-transfers'] });
+      Swal.fire({
+        title: '¡Éxito!',
+        text: 'Transferencia procesada correctamente',
         icon: 'success',
         confirmButtonColor: '#8B5CF6'
       });
@@ -144,6 +243,64 @@ export function RepositionList({ userArea }: { userArea: string }) {
     }
   };
 
+  const handleDelete = async (repositionId: number) => {
+    const { value: reason } = await Swal.fire({
+      title: '¿Estás seguro?',
+      text: 'Esta acción eliminará la reposición permanentemente',
+      input: 'textarea',
+      inputPlaceholder: 'Describe el motivo por el cual esta reposición ya no es necesaria *',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#DC2626',
+      cancelButtonColor: '#6B7280',
+      confirmButtonText: 'Sí, eliminar',
+      cancelButtonText: 'Cancelar',
+      inputValidator: (value) => {
+        if (!value || value.trim().length === 0) {
+          return 'Debes proporcionar un motivo para la eliminación';
+        }
+        if (value.trim().length < 10) {
+          return 'El motivo debe tener al menos 10 caracteres';
+        }
+      }
+    });
+
+    if (reason !== undefined && reason.trim().length > 0) {
+      deleteMutation.mutate({ repositionId, reason: reason.trim() });
+    }
+  };
+
+  const handleComplete = async (repositionId: number) => {
+    const { value: notes } = await Swal.fire({
+      title: 'Finalizar Proceso',
+      input: 'textarea',
+      inputPlaceholder: 'Notas de finalización (opcional)',
+      showCancelButton: true,
+      confirmButtonColor: '#8B5CF6',
+      confirmButtonText: userArea === 'admin' || userArea === 'envios' ? 'Finalizar' : 'Solicitar Finalización'
+    });
+
+    if (notes !== undefined) {
+      completeMutation.mutate({ repositionId, notes });
+    }
+  };
+
+  const handleProcessTransfer = async (transferId: number, action: 'accepted' | 'rejected') => {
+    const result = await Swal.fire({
+      title: `¿${action === 'accepted' ? 'Aceptar' : 'Rechazar'} transferencia?`,
+      text: `Esta acción ${action === 'accepted' ? 'moverá la reposición a tu área' : 'rechazará la transferencia'}`,
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonColor: action === 'accepted' ? '#10B981' : '#EF4444',
+      confirmButtonText: action === 'accepted' ? 'Aceptar' : 'Rechazar',
+      cancelButtonText: 'Cancelar'
+    });
+
+    if (result.isConfirmed) {
+      processTransferMutation.mutate({ transferId, action });
+    }
+  };
+
   if (isLoading) {
     return <div className="text-center py-8">Cargando solicitudes...</div>;
   }
@@ -159,22 +316,94 @@ export function RepositionList({ userArea }: { userArea: string }) {
       </div>
 
       {/* Filtros */}
-      {userArea === 'admin' && (
-        <div className="flex gap-4">
-          <Select value={filterArea} onValueChange={setFilterArea}>
-            <SelectTrigger className="w-48">
-              <SelectValue placeholder="Filtrar por área" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Todas las áreas</SelectItem>
-              {areas.map(area => (
-                <SelectItem key={area} value={area}>
-                  {area.charAt(0).toUpperCase() + area.slice(1)}
-                </SelectItem>
+      <div className="flex flex-wrap gap-4 items-center">
+        {userArea === 'admin' && (
+          <>
+            <Select value={filterArea} onValueChange={setFilterArea}>
+              <SelectTrigger className="w-48">
+                <SelectValue placeholder="Filtrar por área" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todas las áreas</SelectItem>
+                {areas.map(area => (
+                  <SelectItem key={area} value={area}>
+                    {area.charAt(0).toUpperCase() + area.slice(1)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <div className="flex items-center space-x-2">
+              <Switch
+                id="show-history"
+                checked={showHistory}
+                onCheckedChange={setShowHistory}
+              />
+              <Label htmlFor="show-history">Ver historial completo</Label>
+            </div>
+
+            {showHistory && (
+              <div className="flex items-center space-x-2">
+                <Switch
+                  id="include-deleted"
+                  checked={includeDeleted}
+                  onCheckedChange={setIncludeDeleted}
+                />
+                <Label htmlFor="include-deleted">Incluir eliminadas</Label>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Transferencias Pendientes */}
+      {pendingTransfers.length > 0 && (
+        <Card className="border-orange-200 bg-orange-50">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-orange-800">
+              <Bell className="w-5 h-5" />
+              Transferencias Pendientes ({pendingTransfers.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {pendingTransfers.map((transfer: any) => (
+                <div key={transfer.id} className="flex items-center justify-between p-3 bg-white rounded-lg border">
+                  <div>
+                    <p className="font-semibold text-gray-800">
+                      Reposición desde {transfer.fromArea}
+                    </p>
+                    <p className="text-sm text-gray-600">
+                      {transfer.notes && `Notas: ${transfer.notes}`}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      {new Date(transfer.createdAt).toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      className="bg-green-600 hover:bg-green-700"
+                      onClick={() => handleProcessTransfer(transfer.id, 'accepted')}
+                    >
+                      <CheckCircle className="w-4 h-4 mr-1" />
+                      Aceptar
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-red-600 hover:bg-red-50"
+                      onClick={() => handleProcessTransfer(transfer.id, 'rejected')}
+                    >
+                      <XCircle className="w-4 h-4 mr-1" />
+                      Rechazar
+                    </Button>
+                  </div>
+                </div>
               ))}
-            </SelectContent>
-          </Select>
-        </div>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Lista de solicitudes */}
@@ -227,19 +456,33 @@ export function RepositionList({ userArea }: { userArea: string }) {
                       <Eye className="w-4 h-4 mr-2" />
                       Ver Detalles
                     </Button>
-                    
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setTrackedReposition(reposition.id)}
+                      className="text-blue-600 hover:bg-blue-50"
+                    >
+                      <MapPin className="w-4 h-4 mr-2" />
+                      Seguimiento
+                    </Button>
+
                     {reposition.currentArea === userArea && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleTransfer(reposition.id)}
-                      >
-                        <ArrowRight className="w-4 h-4 mr-2" />
-                        Transferir
-                      </Button>
+                      <>
+                        {reposition.status === 'aprobado' && reposition.status !== 'eliminado' && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleTransfer(reposition.id)}
+                          >
+                            <ArrowRight className="w-4 h-4 mr-2" />
+                            Transferir
+                          </Button>
+                        )}
+                      </>
                     )}
 
-                    {(userArea === 'operaciones' || userArea === 'admin') && 
+                    {(userArea === 'operaciones' || userArea === 'admin' || userArea === 'envios') && 
                      reposition.status === 'pendiente' && (
                       <>
                         <Button
@@ -262,6 +505,31 @@ export function RepositionList({ userArea }: { userArea: string }) {
                         </Button>
                       </>
                     )}
+
+                    {reposition.status !== 'completado' && reposition.status !== 'eliminado' && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-purple-600 hover:bg-purple-50"
+                        onClick={() => handleComplete(reposition.id)}
+                      >
+                        <Flag className="w-4 h-4 mr-2" />
+                        {userArea === 'admin' || userArea === 'envios' ? 'Finalizar' : 'Solicitar Finalización'}
+                      </Button>
+                    )}
+
+                    {(userArea === 'admin' || userArea === 'envios') && 
+                     reposition.status !== 'eliminado' && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-red-600 hover:bg-red-50"
+                        onClick={() => handleDelete(reposition.id)}
+                      >
+                        <Trash2 className="w-4 h-4 mr-2" />
+                        Eliminar
+                      </Button>
+                    )}
                   </div>
                 </div>
               </CardContent>
@@ -275,6 +543,12 @@ export function RepositionList({ userArea }: { userArea: string }) {
         <RepositionDetail
           repositionId={selectedReposition}
           onClose={() => setSelectedReposition(null)}
+        />
+      )}
+      {trackedReposition && (
+        <RepositionTracker
+          repositionId={trackedReposition}
+          onClose={() => setTrackedReposition(null)}
         />
       )}
     </div>

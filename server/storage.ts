@@ -33,7 +33,7 @@ import {
   type RepositionStatus
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, or, desc, asc } from "drizzle-orm";
+import { eq, and, or, desc, asc, ne } from "drizzle-orm";
 import session from "express-session";
 import connectPg from "connect-pg-simple";
 import { pool } from "./db";
@@ -87,6 +87,18 @@ export interface IStorage {
   createRepositionTransfer(transfer: InsertRepositionTransfer, createdBy: number): Promise<RepositionTransfer>;
   processRepositionTransfer(transferId: number, action: 'accepted' | 'rejected', userId: number): Promise<RepositionTransfer>;
   getRepositionHistory(repositionId: number): Promise<RepositionHistory[]>;
+  getRepositionTracking(repositionId: number): Promise<any>;
+  getRepositionNotifications(userId: number, userArea: string): Promise<any[]>;
+  deleteReposition(repositionId: number, userId: number, reason?: string): Promise<void>;
+  completeReposition(repositionId: number, userId: number, notes?: string): Promise<void>;
+  requestCompletionApproval(repositionId: number, userId: number, notes?: string): Promise<void>;
+  getAllRepositions(includeDeleted?: boolean): Promise<Reposition[]>;
+  getRecentOrders(area?: Area, limit?: number): Promise<Order[]>;
+  getRecentRepositions(area?: Area, limit?: number): Promise<Reposition[]>;
+  
+  getReportData(type: string, startDate: string, endDate: string, filters: any): Promise<any>;
+  generateReport(type: string, format: string, startDate: string, endDate: string, filters: any): Promise<Buffer>;
+  saveReportToOneDrive(type: string, startDate: string, endDate: string, filters: any): Promise<any>;
   
   createAdminPassword(password: string, createdBy: number): Promise<AdminPassword>;
   verifyAdminPassword(password: string): Promise<boolean>;
@@ -464,18 +476,33 @@ export class DatabaseStorage implements IStorage {
         userId: createdBy,
       });
 
+    // Notificar a admin y operaciones sobre nueva reposición
+    const adminUsers = await db.select().from(users)
+      .where(or(eq(users.area, 'admin'), eq(users.area, 'operaciones')));
+
+    for (const admin of adminUsers) {
+      await this.createNotification({
+        userId: admin.id,
+        type: 'new_reposition',
+        title: 'Nueva Solicitud de Reposición',
+        message: `Se ha creado una nueva solicitud de ${reposition.type}: ${reposition.folio}`,
+        repositionId: reposition.id,
+      });
+    }
+
     return reposition;
   }
 
   async getRepositions(area?: Area, userArea?: Area): Promise<Reposition[]> {
     let query = db.select().from(repositions);
     
-    if (area && userArea !== 'admin') {
-      query = query.where(eq(repositions.currentArea, area));
+    if (userArea !== 'admin' && userArea !== 'envios') {
+        query = query.where(ne(repositions.status, 'eliminado' as RepositionStatus))
+                     .where(ne(repositions.status, 'completado' as RepositionStatus));
     }
     
     return await query.orderBy(desc(repositions.createdAt));
-  }
+}
 
   async getRepositionById(id: number): Promise<Reposition | undefined> {
     const [reposition] = await db.select().from(repositions).where(eq(repositions.id, id));
@@ -536,6 +563,23 @@ export class DatabaseStorage implements IStorage {
         userId: createdBy,
       });
 
+    // Obtener la reposición para el folio
+    const reposition = await this.getRepositionById(transfer.repositionId);
+
+    // Notificar a usuarios del área de destino
+    const targetAreaUsers = await db.select().from(users)
+      .where(eq(users.area, transfer.toArea));
+
+    for (const user of targetAreaUsers) {
+      await this.createNotification({
+        userId: user.id,
+        type: 'reposition_transfer',
+        title: 'Nueva Transferencia de Reposición',
+        message: `Se ha solicitado transferir la reposición ${reposition?.folio} de ${transfer.fromArea} a ${transfer.toArea}`,
+        repositionId: transfer.repositionId,
+      });
+    }
+
     return repositionTransfer;
   }
 
@@ -565,6 +609,36 @@ export class DatabaseStorage implements IStorage {
         userId,
       });
 
+    // Obtener la reposición para el folio
+    const reposition = await this.getRepositionById(transfer.repositionId);
+
+    // Notificar al solicitante original
+    await this.createNotification({
+      userId: transfer.createdBy,
+      type: 'transfer_processed',
+      title: `Transferencia ${action === 'accepted' ? 'Aceptada' : 'Rechazada'}`,
+      message: `La transferencia de la reposición ${reposition?.folio} ha sido ${action === 'accepted' ? 'aceptada' : 'rechazada'}`,
+      repositionId: transfer.repositionId,
+    });
+
+    // Si fue aceptada, notificar a usuarios del área de destino
+    if (action === 'accepted') {
+      const targetAreaUsers = await db.select().from(users)
+        .where(eq(users.area, transfer.toArea));
+
+      for (const user of targetAreaUsers) {
+        if (user.id !== userId) { // No notificar al que procesó
+          await this.createNotification({
+            userId: user.id,
+            type: 'reposition_received',
+            title: 'Nueva Reposición Recibida',
+            message: `La reposición ${reposition?.folio} ha llegado a tu área`,
+            repositionId: transfer.repositionId,
+          });
+        }
+      }
+    }
+
     return transfer;
   }
 
@@ -591,6 +665,218 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(adminPasswords.createdAt));
     
     return !!adminPassword;
+  }
+
+  async deleteReposition(repositionId: number, userId: number, reason: string): Promise<void> {
+    console.log('Deleting reposition:', repositionId, 'by user:', userId, 'reason:', reason);
+    
+    // Obtener la reposición antes de eliminarla
+    const reposition = await this.getRepositionById(repositionId);
+    if (!reposition) {
+      throw new Error('Reposición no encontrada');
+    }
+    
+    console.log('Found reposition:', reposition.folio);
+    
+    await db.update(repositions)
+      .set({
+        status: 'eliminado' as RepositionStatus,
+        completedAt: new Date(),
+      })
+      .where(eq(repositions.id, repositionId));
+
+    console.log('Updated reposition status to eliminado');
+
+    await db.insert(repositionHistory)
+      .values({
+        repositionId,
+        action: 'deleted',
+        description: `Reposición eliminada. Motivo: ${reason}`,
+        userId,
+      });
+
+    console.log('Added history entry');
+
+    // Crear notificación para el solicitante
+    if (reposition.createdBy !== userId) {
+      await this.createNotification({
+        userId: reposition.createdBy,
+        type: 'reposition_deleted',
+        title: 'Reposición Eliminada',
+        message: `La reposición ${reposition.folio} ha sido eliminada. Motivo: ${reason}`,
+        repositionId: repositionId,
+      });
+      console.log('Created notification for user:', reposition.createdBy);
+    }
+  }
+
+  async completeReposition(repositionId: number, userId: number, notes?: string): Promise<void> {
+    await db.update(repositions)
+      .set({
+        status: 'completado' as RepositionStatus,
+        completedAt: new Date(),
+        approvedBy: userId,
+      })
+      .where(eq(repositions.id, repositionId));
+
+    await db.insert(repositionHistory)
+      .values({
+        repositionId,
+        action: 'completed',
+        description: `Reposición finalizada${notes ? `: ${notes}` : ''}`,
+        userId,
+      });
+
+    // Crear notificación para el solicitante
+    const reposition = await this.getRepositionById(repositionId);
+    if (reposition) {
+      await this.createNotification({
+        userId: reposition.createdBy,
+        type: 'reposition_completed',
+        title: 'Reposición Completada',
+        message: `La reposición ${reposition.folio} ha sido completada${notes ? `: ${notes}` : ''}`,
+        repositionId: repositionId,
+      });
+    }
+  }
+
+  async requestCompletionApproval(repositionId: number, userId: number, notes?: string): Promise<void> {
+    await db.insert(repositionHistory)
+        .values({
+            repositionId,
+            action: 'completion_requested',
+            description: `Solicitud de finalización enviada${notes ? `: ${notes}` : ''}`,
+            userId,
+        });
+
+    // Crear notificaciones para admin y Adriana
+    const adminUsers = await db.select().from(users)
+        .where(or(eq(users.area, 'admin'), eq(users.name, 'Adriana'))); // Asumiendo que hay un campo name para Adriana
+
+    const reposition = await this.getRepositionById(repositionId);
+    if (reposition) {
+        for (const admin of adminUsers) {
+            await this.createNotification({
+                userId: admin.id,
+                type: 'completion_approval_needed',
+                title: 'Solicitud de Finalización',
+                message: `Se solicita aprobación para finalizar la reposición ${reposition.folio}${notes ? `: ${notes}` : ''}`,
+                repositionId: repositionId,
+            });
+        }
+    }
+}
+
+  async getAllRepositions(includeDeleted: boolean = false): Promise<Reposition[]> {
+    let query = db.select().from(repositions);
+    
+    if (!includeDeleted) {
+      query = query.where(ne(repositions.status, 'eliminado' as RepositionStatus));
+    }
+    
+    return await query.orderBy(desc(repositions.createdAt));
+  }
+
+  async getRecentOrders(area?: Area, limit: number = 10): Promise<Order[]> {
+    let query = db.select().from(orders);
+    
+    if (area && area !== 'admin') {
+      query = query.where(eq(orders.currentArea, area));
+    }
+    
+    return await query
+      .orderBy(desc(orders.createdAt))
+      .limit(limit);
+  }
+
+  async getRecentRepositions(area?: Area, limit: number = 10): Promise<Reposition[]> {
+    let query = db.select().from(repositions)
+      .where(ne(repositions.status, 'eliminado' as RepositionStatus));
+    
+    if (area && area !== 'admin') {
+      query = query.where(eq(repositions.currentArea, area));
+    }
+    
+    return await query
+      .orderBy(desc(repositions.createdAt))
+      .limit(limit);
+  }
+
+  async getRepositionTracking(repositionId: number): Promise<any> {
+    const reposition = await this.getRepositionById(repositionId);
+    if (!reposition) throw new Error('Reposition not found');
+
+    const history = await this.getRepositionHistory(repositionId);
+
+    // Definir el flujo de áreas para reposiciones
+    const workflowAreas = ['patronaje', 'corte', 'bordado', 'ensamble', 'plancha', 'calidad', 'operaciones'];
+    
+    const steps = workflowAreas.map((area, index) => {
+      const areaHistory = history.find(h => h.toArea === area || (h.action === 'created' && reposition.currentArea === area));
+      
+      let status: 'completed' | 'current' | 'pending' = 'pending';
+      
+      if (areaHistory) {
+        status = 'completed';
+      } else if (reposition.currentArea === area) {
+        status = 'current';
+      }
+
+      return {
+        id: index + 1,
+        area,
+        status,
+        timestamp: areaHistory?.createdAt,
+        user: areaHistory ? `Usuario ${areaHistory.userId}` : undefined,
+        notes: areaHistory?.description
+      };
+    });
+
+    // Calcular progreso
+    const completedSteps = steps.filter(s => s.status === 'completed').length;
+    const currentStep = steps.find(s => s.status === 'current');
+    const progress = currentStep 
+      ? Math.round(((completedSteps + 0.5) / steps.length) * 100)
+      : Math.round((completedSteps / steps.length) * 100);
+
+    return {
+      reposition: {
+        folio: reposition.folio,
+        status: reposition.status,
+        currentArea: reposition.currentArea,
+        progress
+      },
+      steps,
+      history: history.map(h => ({
+        id: h.id,
+        action: h.action,
+        description: h.description,
+        timestamp: h.createdAt,
+        userName: `Usuario ${h.userId}`,
+        fromArea: h.fromArea,
+        toArea: h.toArea
+      }))
+    };
+  }
+
+  async getRepositionNotifications(userId: number, userArea: string): Promise<any[]> {
+    const notifications = await db.select().from(notifications)
+      .where(and(
+        eq(notifications.userId, userId),
+        eq(notifications.read, false)
+      ))
+      .orderBy(desc(notifications.createdAt));
+
+    return notifications.filter(n => n.type?.includes('reposition') || n.type?.includes('completion'));
+  }
+
+  async getPendingRepositionTransfers(userArea: Area): Promise<RepositionTransfer[]> {
+    return await db.select().from(repositionTransfers)
+      .where(and(
+        eq(repositionTransfers.toArea, userArea),
+        eq(repositionTransfers.status, 'pending')
+      ))
+      .orderBy(desc(repositionTransfers.createdAt));
   }
 }
 
