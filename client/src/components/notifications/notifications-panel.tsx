@@ -1,0 +1,202 @@
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { ArrowRight, CheckCircle, Info, Clock, Bell } from "lucide-react";
+import { type Transfer } from "@shared/schema";
+import clsx from "clsx";
+
+interface NotificationsPanelProps {
+  open: boolean;
+  onClose: () => void;
+}
+
+export function NotificationsPanel({ open, onClose }: NotificationsPanelProps) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const { data: pendingTransfers = [] } = useQuery<Transfer[]>({
+    queryKey: ["/api/transfers/pending"],
+    enabled: open,
+  });
+
+  const acceptTransferMutation = useMutation({
+    mutationFn: async (transferId: number) => {
+      const res = await apiRequest("POST", `/api/transfers/${transferId}/accept`);
+      return await res.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Transferencia aceptada",
+        description: "La transferencia ha sido aceptada exitosamente",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/transfers/pending"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error al aceptar",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const rejectTransferMutation = useMutation({
+    mutationFn: async (transferId: number) => {
+      const res = await apiRequest("POST", `/api/transfers/${transferId}/reject`);
+      return await res.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Transferencia rechazada",
+        description: "La transferencia ha sido rechazada",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/transfers/pending"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error al rechazar",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const getAreaDisplayName = (area: string) => {
+    const names: Record<string, string> = {
+      corte: "Corte",
+      bordado: "Bordado",
+      ensamble: "Ensamble",
+      plancha: "Plancha/Empaque",
+      calidad: "Calidad",
+      envios: "Envíos",
+      admin: "Admin",
+    };
+    return names[area] || area;
+  };
+
+  const formatDate = (dateInput: string | Date) => {
+    const date = typeof dateInput === "string" ? new Date(dateInput) : dateInput;
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffDays > 0) {
+      return `Hace ${diffDays} día${diffDays > 1 ? "s" : ""}`;
+    } else if (diffHours > 0) {
+      return `Hace ${diffHours} hora${diffHours > 1 ? "s" : ""}`;
+    } else {
+      return "Hace unos minutos";
+    }
+  };
+
+  return (
+    <Sheet open={open} onOpenChange={onClose}>
+      <SheetContent className="w-96 bg-white/60 backdrop-blur-lg border-l border-gray-200 dark:bg-gray-900/70 dark:border-gray-700 transition-all">
+        <SheetHeader>
+          <SheetTitle className="flex items-center justify-between text-xl font-semibold text-gray-800 dark:text-white">
+            <div className="flex items-center gap-2">
+              <Bell className="text-indigo-600" size={20} />
+              Notificaciones
+            </div>
+            {pendingTransfers.length > 0 && (
+              <Badge variant="destructive">{pendingTransfers.length}</Badge>
+            )}
+          </SheetTitle>
+        </SheetHeader>
+
+        <div className="mt-6 space-y-6 overflow-y-auto h-full pb-24 custom-scroll">
+          {pendingTransfers.length > 0 && (
+            <>
+              <p className="text-sm font-medium text-gray-500">Transferencias Pendientes</p>
+              {pendingTransfers.map((transfer) => (
+                <div
+                  key={transfer.id}
+                  className="bg-white/80 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-md rounded-xl p-4 transition-all duration-300 ease-out hover:shadow-xl animate-fade-in"
+                >
+                  <div className="flex items-start space-x-3">
+                    <div className="w-9 h-9 bg-yellow-100 rounded-full flex items-center justify-center">
+                      <ArrowRight className="text-yellow-600" size={18} />
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="font-semibold text-gray-800 dark:text-gray-100">
+                        {transfer.pieces} piezas desde {getAreaDisplayName(transfer.fromArea)}
+                      </h4>
+                      <p className="text-xs text-gray-500 mt-1">{formatDate(transfer.createdAt)}</p>
+                      <div className="flex items-center space-x-2 mt-3">
+                        <Button
+                          size="sm"
+                          className="rounded-full"
+                          onClick={() => acceptTransferMutation.mutate(transfer.id)}
+                          disabled={acceptTransferMutation.isPending}
+                        >
+                          Aceptar
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          className="rounded-full"
+                          onClick={() => rejectTransferMutation.mutate(transfer.id)}
+                          disabled={rejectTransferMutation.isPending}
+                        >
+                          Rechazar
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+
+          <hr className="border-t border-gray-300 dark:border-gray-600" />
+
+          <p className="text-sm font-medium text-gray-500">Sistema</p>
+
+          <div className="bg-blue-50 border border-blue-200 dark:border-blue-400 rounded-xl p-4">
+            <div className="flex items-start space-x-3">
+              <div className="w-9 h-9 bg-blue-100 rounded-full flex items-center justify-center">
+                <Info className="text-blue-600" size={18} />
+              </div>
+              <div className="flex-1">
+                <h4 className="font-medium text-gray-900 dark:text-gray-100">Sistema Actualizado</h4>
+                <p className="text-sm text-gray-700 dark:text-gray-300 mt-1">
+                  Nuevas funcionalidades disponibles
+                </p>
+                <p className="text-xs text-gray-500 mt-2">Hace 1 día</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-green-50 border border-green-200 dark:border-green-400 rounded-xl p-4">
+            <div className="flex items-start space-x-3">
+              <div className="w-9 h-9 bg-green-100 rounded-full flex items-center justify-center">
+                <CheckCircle className="text-green-600" size={18} />
+              </div>
+              <div className="flex-1">
+                <h4 className="font-medium text-gray-900 dark:text-gray-100">Bienvenido a JASANA</h4>
+                <p className="text-sm text-gray-700 dark:text-gray-300 mt-1">
+                  Sistema de gestión listo para usar
+                </p>
+                <p className="text-xs text-gray-500 mt-2">Hace 2 días</p>
+              </div>
+            </div>
+          </div>
+
+          {pendingTransfers.length === 0 && (
+            <div className="text-center py-12 text-gray-500">
+              <Clock size={48} className="mx-auto mb-4 text-gray-300" />
+              <p>No hay notificaciones pendientes</p>
+            </div>
+          )}
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
