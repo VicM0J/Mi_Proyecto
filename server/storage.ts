@@ -40,6 +40,24 @@ import { pool } from "./db";
 
 const PostgresSessionStore = connectPg(session);
 
+// Función para enviar notificaciones por WebSocket
+function broadcastNotification(notification: any) {
+  const wss = (global as any).wss;
+  if (wss) {
+    wss.clients.forEach((client: any) => {
+      if (client.readyState === 1) { // WebSocket.OPEN
+        client.send(JSON.stringify({
+          type: 'notification',
+          data: notification
+        }));
+      }
+    });
+    console.log('Notificación enviada por WebSocket:', notification.title);
+  } else {
+    console.log('WebSocket no disponible para enviar notificación');
+  }
+}
+
 export interface IStorage {
 
   getUser(id: number): Promise<User | undefined>;
@@ -47,7 +65,7 @@ export interface IStorage {
   createUser(user: InsertUser): Promise<User>;
   getAdminUser(): Promise<User | undefined>;
   resetUserPassword(userId: number, hashedPassword: string): Promise<void>;
-  
+
 
   createOrder(order: InsertOrder, createdBy: number): Promise<Order>;
   getOrders(area?: Area): Promise<Order[]>;
@@ -58,48 +76,49 @@ export interface IStorage {
 
   getOrderPieces(orderId: number): Promise<any[]>;
   updateOrderPieces(orderId: number, area: Area, pieces: number): Promise<void>;
-  
+
   createTransfer(transfer: InsertTransfer, createdBy: number): Promise<Transfer>;
   getTransfersByArea(area: Area): Promise<Transfer[]>;
   getPendingTransfersForUser(userId: number): Promise<Transfer[]>;
   acceptTransfer(transferId: number, processedBy: number): Promise<void>;
   rejectTransfer(transferId: number, processedBy: number): Promise<void>;
-  
+
   addOrderHistory(orderId: number, action: string, description: string, userId: number, options?: {
     fromArea?: Area;
     toArea?: Area;
     pieces?: number;
   }): Promise<void>;
   getOrderHistory(orderId: number): Promise<OrderHistory[]>;
-  
+
   createNotification(notification: InsertNotification): Promise<Notification>;
   getUserNotifications(userId: number): Promise<Notification[]>;
   markNotificationRead(notificationId: number): Promise<void>;
-  
+
   sessionStore: any;
-  
+
   createReposition(reposition: InsertReposition & { folio: string }, pieces: InsertRepositionPiece[], createdBy: number): Promise<Reposition>;
   getRepositions(area?: Area, userArea?: Area): Promise<Reposition[]>;
+  getRepositionsByArea(area: Area, userId?: number): Promise<Reposition[]>;
   getRepositionById(id: number): Promise<Reposition | undefined>;
   getNextRepositionCounter(): Promise<number>;
   approveReposition(repositionId: number, action: RepositionStatus, userId: number, notes?: string): Promise<Reposition>;
-  
+
   createRepositionTransfer(transfer: InsertRepositionTransfer, createdBy: number): Promise<RepositionTransfer>;
   processRepositionTransfer(transferId: number, action: 'accepted' | 'rejected', userId: number): Promise<RepositionTransfer>;
   getRepositionHistory(repositionId: number): Promise<RepositionHistory[]>;
   getRepositionTracking(repositionId: number): Promise<any>;
-  getRepositionNotifications(userId: number, userArea: string): Promise<any[]>;
+
   deleteReposition(repositionId: number, userId: number, reason?: string): Promise<void>;
   completeReposition(repositionId: number, userId: number, notes?: string): Promise<void>;
   requestCompletionApproval(repositionId: number, userId: number, notes?: string): Promise<void>;
   getAllRepositions(includeDeleted?: boolean): Promise<Reposition[]>;
   getRecentOrders(area?: Area, limit?: number): Promise<Order[]>;
   getRecentRepositions(area?: Area, limit?: number): Promise<Reposition[]>;
-  
+
   getReportData(type: string, startDate: string, endDate: string, filters: any): Promise<any>;
   generateReport(type: string, format: string, startDate: string, endDate: string, filters: any): Promise<Buffer>;
   saveReportToOneDrive(type: string, startDate: string, endDate: string, filters: any): Promise<any>;
-  
+
   createAdminPassword(password: string, createdBy: number): Promise<AdminPassword>;
   verifyAdminPassword(password: string): Promise<boolean>;
 }
@@ -221,7 +240,7 @@ export class DatabaseStorage implements IStorage {
     const pieces = await db.select().from(orderPieces)
       .where(eq(orderPieces.orderId, orderId))
       .orderBy(asc(orderPieces.area));
-    
+
     console.log(`Order pieces for order ${orderId}:`, pieces);
     return pieces;
   }
@@ -294,7 +313,7 @@ export class DatabaseStorage implements IStorage {
   async acceptTransfer(transferId: number, processedBy: number): Promise<void> {
     const [transfer] = await db.select().from(transfers)
       .where(eq(transfers.id, transferId));
-    
+
     if (!transfer) return;
 
     await db.update(transfers)
@@ -314,7 +333,7 @@ export class DatabaseStorage implements IStorage {
     if (fromAreaPieces.length > 0) {
       const currentPieces = fromAreaPieces[0].pieces;
       const remainingPieces = currentPieces - transfer.pieces;
-      
+
       if (remainingPieces > 0) {
         await db.update(orderPieces)
           .set({ pieces: remainingPieces, updatedAt: new Date() })
@@ -357,7 +376,7 @@ export class DatabaseStorage implements IStorage {
 
     const allOrderPieces = await db.select().from(orderPieces)
       .where(eq(orderPieces.orderId, transfer.orderId));
-    
+
     if (allOrderPieces.length === 1 && allOrderPieces[0].area === transfer.toArea) {
       await db.update(orders)
         .set({ currentArea: transfer.toArea })
@@ -380,7 +399,7 @@ export class DatabaseStorage implements IStorage {
   async rejectTransfer(transferId: number, processedBy: number): Promise<void> {
     const [transfer] = await db.select().from(transfers)
       .where(eq(transfers.id, transferId));
-    
+
     if (!transfer) return;
 
     await db.update(transfers)
@@ -437,6 +456,12 @@ export class DatabaseStorage implements IStorage {
       .insert(notifications)
       .values(notification)
       .returning();
+    
+      broadcastNotification({
+        ...newNotification,
+        userId: newNotification.userId
+      });
+    
     return newNotification;
   }
 
@@ -495,14 +520,41 @@ export class DatabaseStorage implements IStorage {
 
   async getRepositions(area?: Area, userArea?: Area): Promise<Reposition[]> {
     let query = db.select().from(repositions);
-    
+
     if (userArea !== 'admin' && userArea !== 'envios') {
         query = query.where(ne(repositions.status, 'eliminado' as RepositionStatus))
                      .where(ne(repositions.status, 'completado' as RepositionStatus));
     }
-    
+
     return await query.orderBy(desc(repositions.createdAt));
-}
+  }
+
+  async getRepositionsByArea(area: Area, userId?: number): Promise<Reposition[]> {
+    let whereCondition;
+
+    if (userId) {
+      // Si se proporciona userId, mostrar reposiciones del área actual O creadas por el usuario
+      whereCondition = and(
+        or(
+          eq(repositions.currentArea, area),
+          eq(repositions.createdBy, userId)
+        ),
+        ne(repositions.status, 'eliminado' as RepositionStatus),
+        ne(repositions.status, 'completado' as RepositionStatus)
+      );
+    } else {
+      // Sin userId, solo mostrar del área actual
+      whereCondition = and(
+        eq(repositions.currentArea, area),
+        ne(repositions.status, 'eliminado' as RepositionStatus),
+        ne(repositions.status, 'completado' as RepositionStatus)
+      );
+    }
+
+    return await db.select().from(repositions)
+      .where(whereCondition)
+      .orderBy(desc(repositions.createdAt));
+  }
 
   async getRepositionById(id: number): Promise<Reposition | undefined> {
     const [reposition] = await db.select().from(repositions).where(eq(repositions.id, id));
@@ -513,14 +565,14 @@ export class DatabaseStorage implements IStorage {
     const now = new Date();
     const year = now.getFullYear();
     const month = now.getMonth() + 1;
-    
+
     const yearStr = year.toString();
     const monthStr = String(month).padStart(2, '0');
     const folioPrefix = `JN-REQ-${monthStr}-${yearStr.slice(-2)}-`;
-    
+
     const result = await db.select().from(repositions);
     const thisMonthCount = result.filter(r => r.folio.startsWith(folioPrefix)).length;
-    
+
     return thisMonthCount + 1;
   }
 
@@ -530,6 +582,7 @@ export class DatabaseStorage implements IStorage {
         status: action,
         approvedBy: userId,
         approvedAt: new Date(),
+        // NO cambiar área automáticamente, mantener en área actual
       })
       .where(eq(repositions.id, repositionId))
       .returning();
@@ -538,9 +591,18 @@ export class DatabaseStorage implements IStorage {
       .values({
         repositionId,
         action: action === 'aprobado' ? 'approved' : 'rejected',
-        description: `Reposition ${action} by admin/operations${notes ? `: ${notes}` : ''}`,
+        description: `Reposición ${action === 'aprobado' ? 'aprobada' : 'rechazada'}${notes ? `: ${notes}` : ''}`,
         userId,
       });
+
+    // Notificar al solicitante original
+    await this.createNotification({
+      userId: reposition.createdBy,
+      type: action === 'aprobado' ? 'reposition_approved' : 'reposition_rejected',
+      title: action === 'aprobado' ? 'Reposición Aprobada' : 'Reposición Rechazada',
+      message: `Tu reposición ${reposition.folio} ha sido ${action === 'aprobado' ? 'aprobada' : 'rechazada'}${notes ? `: ${notes}` : ''}`,
+      repositionId: repositionId,
+    });
 
     return reposition;
   }
@@ -663,21 +725,21 @@ export class DatabaseStorage implements IStorage {
     const [adminPassword] = await db.select().from(adminPasswords)
       .where(and(eq(adminPasswords.password, password), eq(adminPasswords.isActive, true)))
       .orderBy(desc(adminPasswords.createdAt));
-    
+
     return !!adminPassword;
   }
 
   async deleteReposition(repositionId: number, userId: number, reason: string): Promise<void> {
     console.log('Deleting reposition:', repositionId, 'by user:', userId, 'reason:', reason);
-    
+
     // Obtener la reposición antes de eliminarla
     const reposition = await this.getRepositionById(repositionId);
     if (!reposition) {
       throw new Error('Reposición no encontrada');
     }
-    
+
     console.log('Found reposition:', reposition.folio);
-    
+
     await db.update(repositions)
       .set({
         status: 'eliminado' as RepositionStatus,
@@ -749,9 +811,9 @@ export class DatabaseStorage implements IStorage {
             userId,
         });
 
-    // Crear notificaciones para admin y Adriana
+    // Crear notificaciones para admin y envíos
     const adminUsers = await db.select().from(users)
-        .where(or(eq(users.area, 'admin'), eq(users.name, 'Adriana'))); // Asumiendo que hay un campo name para Adriana
+        .where(or(eq(users.area, 'admin'), eq(users.area, 'envios')));
 
     const reposition = await this.getRepositionById(repositionId);
     if (reposition) {
@@ -769,21 +831,21 @@ export class DatabaseStorage implements IStorage {
 
   async getAllRepositions(includeDeleted: boolean = false): Promise<Reposition[]> {
     let query = db.select().from(repositions);
-    
+
     if (!includeDeleted) {
       query = query.where(ne(repositions.status, 'eliminado' as RepositionStatus));
     }
-    
+
     return await query.orderBy(desc(repositions.createdAt));
   }
 
   async getRecentOrders(area?: Area, limit: number = 10): Promise<Order[]> {
     let query = db.select().from(orders);
-    
+
     if (area && area !== 'admin') {
       query = query.where(eq(orders.currentArea, area));
     }
-    
+
     return await query
       .orderBy(desc(orders.createdAt))
       .limit(limit);
@@ -792,11 +854,11 @@ export class DatabaseStorage implements IStorage {
   async getRecentRepositions(area?: Area, limit: number = 10): Promise<Reposition[]> {
     let query = db.select().from(repositions)
       .where(ne(repositions.status, 'eliminado' as RepositionStatus));
-    
+
     if (area && area !== 'admin') {
       query = query.where(eq(repositions.currentArea, area));
     }
-    
+
     return await query
       .orderBy(desc(repositions.createdAt))
       .limit(limit);
@@ -810,12 +872,12 @@ export class DatabaseStorage implements IStorage {
 
     // Definir el flujo de áreas para reposiciones
     const workflowAreas = ['patronaje', 'corte', 'bordado', 'ensamble', 'plancha', 'calidad', 'operaciones'];
-    
+
     const steps = workflowAreas.map((area, index) => {
       const areaHistory = history.find(h => h.toArea === area || (h.action === 'created' && reposition.currentArea === area));
-      
+
       let status: 'completed' | 'current' | 'pending' = 'pending';
-      
+
       if (areaHistory) {
         status = 'completed';
       } else if (reposition.currentArea === area) {
@@ -859,16 +921,7 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  async getRepositionNotifications(userId: number, userArea: string): Promise<any[]> {
-    const notifications = await db.select().from(notifications)
-      .where(and(
-        eq(notifications.userId, userId),
-        eq(notifications.read, false)
-      ))
-      .orderBy(desc(notifications.createdAt));
 
-    return notifications.filter(n => n.type?.includes('reposition') || n.type?.includes('completion'));
-  }
 
   async getPendingRepositionTransfers(userArea: Area): Promise<RepositionTransfer[]> {
     return await db.select().from(repositionTransfers)

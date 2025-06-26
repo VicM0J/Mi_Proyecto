@@ -1,13 +1,21 @@
-import express, { type Request, Response, NextFunction } from "express";
+import express, { Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { camelCaseResponseMiddleware } from './middlewares/camelCaseMiddleware';
+import { WebSocketServer } from 'ws';
+
+declare global {
+  var wss: WebSocketServer | undefined;
+  var upgradeListenerAdded: boolean | undefined;
+  var serverStarted: boolean | undefined;
+}
 
 const app = express();
 app.use(express.json());
 app.use(camelCaseResponseMiddleware);
 app.use(express.urlencoded({ extended: false }));
 
+// Middleware de logging
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
@@ -38,28 +46,73 @@ app.use((req, res, next) => {
   next();
 });
 
-(async () => {
-  const server = await registerRoutes(app);
+if (!global.serverStarted) {
+  global.serverStarted = true;
 
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
+  (async () => {
+    const server = await registerRoutes(app);
 
-    res.status(status).json({ message });
-    throw err;
-  });
+    // Configuración WebSocket
+    if (!global.wss) {
+      global.wss = new WebSocketServer({ noServer: true });
 
-  if (app.get("env") === "development") {
-    await setupVite(app, server);
-  } else {
-    serveStatic(app);
-  }
+      global.wss.on('connection', (ws) => {
+        console.log('Nueva conexión WebSocket establecida');
 
-  const port = 5000;
-  server.listen({
-    port,
-    host: "0.0.0.0",
-  }, () => {
-    log(`serving on port ${port}`);
-  });
-})();
+        ws.on('message', (message) => {
+          try {
+            const data = JSON.parse(message.toString());
+            console.log('Mensaje WebSocket recibido:', data);
+          } catch (error) {
+            console.error('Error al procesar mensaje WebSocket:', error);
+          }
+        });
+
+        ws.on('close', () => {
+          console.log('Conexión WebSocket cerrada');
+        });
+
+        ws.on('error', (error) => {
+          console.error('Error en WebSocket:', error);
+        });
+      });
+    }
+
+    // Manejador de upgrade (WebSocket)
+    if (!global.upgradeListenerAdded) {
+      // Eliminamos cualquier listener previo para evitar duplicados
+      server.removeAllListeners('upgrade');
+
+      server.on('upgrade', (req, socket, head) => {
+        if (req.url === '/ws') {
+          if (!socket.destroyed) {  // Verificamos que el socket no esté cerrado
+            global.wss!.handleUpgrade(req, socket, head, (ws) => {
+              global.wss!.emit('connection', ws, req);
+            });
+          }
+        } else {
+          socket.destroy();
+        }
+      });
+      global.upgradeListenerAdded = true;
+    }
+
+    // Configuración Vite para desarrollo o archivos estáticos para producción
+    if (app.get("env") === "development") {
+      await setupVite(app, server);
+    } else {
+      serveStatic(app);
+    }
+
+    // Iniciar servidor
+    const port = 5000;
+    server.listen({
+      port,
+      host: "0.0.0.0",
+    }, () => {
+      log(`Servidor activo en http://localhost:${port}`);
+    });
+  })();
+} else {
+  console.log('Servidor ya está iniciado — No se inicia otra vez');
+}

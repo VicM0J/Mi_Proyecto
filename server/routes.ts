@@ -366,22 +366,22 @@ function registerRepositionRoutes(app: Express) {
     try {
       const user = req.user!;
       const { pieces, ...repositionData } = req.body;
-      
+
       const validatedData = insertRepositionSchema.parse(repositionData);
-      
+
       const now = new Date();
       const month = String(now.getMonth() + 1).padStart(2, '0');
       const year = String(now.getFullYear()).slice(-2);
       const counter = await storage.getNextRepositionCounter();
       const folio = `JN-REQ-${month}-${year}-${String(counter).padStart(3, '0')}`;
-      
+
       const reposition = await storage.createReposition({
         ...validatedData,
         folio,
         currentArea: user.area,
         solicitanteArea: user.area
       }, pieces, user.id);
-      
+
       res.status(201).json(reposition);
     } catch (error) {
       console.error('Create reposition error:', error);
@@ -394,12 +394,27 @@ function registerRepositionRoutes(app: Express) {
 
     try {
       const user = req.user!;
-      const area = req.query.area as Area;
-      const repositions = await storage.getRepositions(area || user.area, user.area);
+      const area = req.query.area as string;
+
+      let repositions;
+      
+      // Si es admin o envios y no especifica área, mostrar todas las reposiciones
+      if ((user.area === 'admin' || user.area === 'envios') && (!area || area === 'all')) {
+        repositions = await storage.getAllRepositions(false);
+      } 
+      // Si especifica un área en particular
+      else if (area && area !== 'all') {
+        repositions = await storage.getRepositionsByArea(area, user.id);
+      } 
+      // Para usuarios normales, solo las de su área en estados activos
+      else {
+        repositions = await storage.getRepositionsByArea(user.area, user.id);
+      }
+
       res.json(repositions);
     } catch (error) {
       console.error('Get repositions error:', error);
-      res.status(500).json({ message: "Error al obtener reposiciones" });
+      res.status(500).json({ message: "Error al cargar las reposiciones" });
     }
   });
 
@@ -541,7 +556,7 @@ function registerRepositionRoutes(app: Express) {
     try {
       const user = req.user!;
       console.log('Delete request from user:', user.area, 'for reposition:', req.params.id);
-      
+
       if (user.area !== 'admin' && user.area !== 'envios') {
         return res.status(403).json({ message: "Solo Admin o Envíos pueden eliminar reposiciones" });
       }
@@ -551,9 +566,9 @@ function registerRepositionRoutes(app: Express) {
         return res.status(400).json({ message: "ID de reposición inválido" });
       }
       const { reason } = req.body;
-      
+
       console.log('Delete request data:', { repositionId, reason });
-      
+
       if (!reason || reason.trim().length === 0) {
         return res.status(400).json({ message: "El motivo de eliminación es obligatorio" });
       }
@@ -561,7 +576,7 @@ function registerRepositionRoutes(app: Express) {
       if (reason.trim().length < 10) {
         return res.status(400).json({ message: "El motivo debe tener al menos 10 caracteres" });
       }
-      
+
       await storage.deleteReposition(repositionId, user.id, reason.trim());
       console.log('Reposition deleted successfully:', repositionId);
       res.json({ message: "Reposición eliminada correctamente" });
@@ -620,11 +635,44 @@ function registerRepositionRoutes(app: Express) {
 
     try {
       const user = req.user!;
-      const notifications = await storage.getRepositionNotifications(user.id, user.area);
-      res.json(notifications);
+      const notifications = await storage.getUserNotifications(user.id);
+      
+      // Filtrar solo notificaciones de reposiciones no leídas
+      const repositionNotifications = notifications.filter(n => 
+        !n.read && (
+          n.type?.includes('reposition') || 
+          n.type?.includes('completion') ||
+          n.type === 'new_reposition' ||
+          n.type === 'reposition_transfer' ||
+          n.type === 'reposition_approved' ||
+          n.type === 'reposition_rejected' ||
+          n.type === 'reposition_completed' ||
+          n.type === 'reposition_deleted' ||
+          n.type === 'completion_approval_needed'
+        )
+      );
+      
+      res.json(repositionNotifications);
     } catch (error) {
       console.error('Get reposition notifications error:', error);
       res.status(500).json({ message: "Error al obtener notificaciones de reposición" });
+    }
+  });
+
+  router.post("/:id/read", async (req, res) => {
+    if (!req.isAuthenticated()) return res.status(401).json({ message: "Autenticación requerida" });
+
+    try {
+      const notificationId = parseInt(req.params.id);
+      if (!notificationId) {
+        return res.status(400).json({ message: "ID de notificación inválido" });
+      }
+
+      await storage.markNotificationRead(notificationId);
+      res.json({ message: "Notificación marcada como leída" });
+    } catch (error) {
+      console.error('Mark notification read error:', error);
+      res.status(500).json({ message: "Error al marcar notificación como leída" });
     }
   });
 
@@ -677,10 +725,10 @@ function registerReportsRoutes(app: Express) {
         endDate as string,
         { area: area as string, status: status as string, urgency: urgency as string }
       );
-      
+
       const contentType = format === 'excel' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/pdf';
       const filename = `reporte-${type}-${new Date().toISOString().split('T')[0]}.${format === 'excel' ? 'xlsx' : 'pdf'}`;
-      
+
       res.setHeader('Content-Type', contentType);
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       res.send(buffer);
@@ -710,4 +758,3 @@ function registerReportsRoutes(app: Express) {
 
   app.use("/api/reports", router);
 }
-

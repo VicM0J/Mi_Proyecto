@@ -49,28 +49,51 @@ export function RepositionList({ userArea }: { userArea: string }) {
   const [showForm, setShowForm] = useState(false);
   const [selectedReposition, setSelectedReposition] = useState<number | null>(null);
   const [trackedReposition, setTrackedReposition] = useState<number | null>(null);
-  const [filterArea, setFilterArea] = useState<string>(userArea === 'admin' ? 'all' : userArea);
+  const [filterArea, setFilterArea] = useState<string>(userArea === 'admin' || userArea === 'envios' ? 'all' : userArea);
   const [showHistory, setShowHistory] = useState(false);
   const [includeDeleted, setIncludeDeleted] = useState(false);
   const queryClient = useQueryClient();
 
-  const { data: repositions = [], isLoading } = useQuery({
+  const { data: repositions = [], isLoading } = useQuery<Reposition[]>({
     queryKey: ['repositions', filterArea, showHistory, includeDeleted],
     queryFn: async () => {
-      let url = showHistory && userArea === 'admin' 
+      let url = showHistory && (userArea === 'admin' || userArea === 'envios')
         ? `/api/repositions/all?includeDeleted=${includeDeleted}`
         : (filterArea && filterArea !== 'all')
           ? `/api/repositions?area=${filterArea}`
           : '/api/repositions';
 
       const response = await fetch(url);
-      if (!response.ok) throw new Error('Failed to fetch repositions');
-      return response.json();
+      if (!response.ok) throw new Error('Error al cargar las reposiciones');
+      const data = await response.json();
+
+      // Filtrar reposiciones completadas y eliminadas para usuarios que no son admin ni envíos
+      if (userArea !== 'admin' && userArea !== 'envios') {
+        return data.filter((repo: any) => repo.status !== 'completado' && repo.status !== 'eliminado');
+      }
+
+      return data;
     }
   });
 
+  const { data: notifications = [] } = useQuery({
+    queryKey: ["/api/notifications"],
+    queryFn: async () => {
+      const res = await fetch("/api/notifications");
+      if (!res.ok) throw new Error('Error al cargar notificaciones');
+      const allNotifications = await res.json();
+      return allNotifications.filter((n: any) => 
+        !n.read && (
+          n.type?.includes('reposition') || 
+          n.type?.includes('completion') ||
+          n.type === 'completion_approval_needed'
+        )
+      );
+    },
+  });
+
   const { data: pendingTransfers = [] } = useQuery({
-    queryKey: ['pending-reposition-transfers'],
+    queryKey: ['transferencias-pendientes-reposicion'],
     queryFn: async () => {
       const response = await fetch('/api/repositions/transfers/pending');
       if (!response.ok) return [];
@@ -85,7 +108,7 @@ export function RepositionList({ userArea }: { userArea: string }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ toArea, notes }),
       });
-      if (!response.ok) throw new Error('Failed to transfer reposition');
+      if (!response.ok) throw new Error('Error al transferir la reposición');
       return response.json();
     },
     onSuccess: () => {
@@ -106,7 +129,7 @@ export function RepositionList({ userArea }: { userArea: string }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, notes }),
       });
-      if (!response.ok) throw new Error('Failed to process approval');
+      if (!response.ok) throw new Error('Error al procesar la aprobación');
       return response.json();
     },
     onSuccess: () => {
@@ -164,7 +187,7 @@ export function RepositionList({ userArea }: { userArea: string }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notes }),
       });
-      if (!response.ok) throw new Error('Failed to complete reposition');
+      if (!response.ok) throw new Error('Error al completar la reposición');
       return response.json();
     },
     onSuccess: () => {
@@ -185,12 +208,12 @@ export function RepositionList({ userArea }: { userArea: string }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action }),
       });
-      if (!response.ok) throw new Error('Failed to process transfer');
+      if (!response.ok) throw new Error('Error al procesar la transferencia');
       return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['repositions'] });
-      queryClient.invalidateQueries({ queryKey: ['pending-reposition-transfers'] });
+      queryClient.invalidateQueries({ queryKey: ['transferencias-pendientes-reposicion'] });
       Swal.fire({
         title: '¡Éxito!',
         text: 'Transferencia procesada correctamente',
@@ -317,7 +340,7 @@ export function RepositionList({ userArea }: { userArea: string }) {
 
       {/* Filtros */}
       <div className="flex flex-wrap gap-4 items-center">
-        {userArea === 'admin' && (
+        {(userArea === 'admin' || userArea === 'envios') && (
           <>
             <Select value={filterArea} onValueChange={setFilterArea}>
               <SelectTrigger className="w-48">
@@ -445,7 +468,14 @@ export function RepositionList({ userArea }: { userArea: string }) {
                   <div className="flex items-center gap-4 text-sm text-gray-600">
                     <span>Área actual: {reposition.currentArea}</span>
                     <span>•</span>
-                    <span>{new Date(reposition.createdAt).toLocaleDateString()}</span>
+                    <span>{new Date(reposition.createdAt).toLocaleString('es-ES', {
+                      day: '2-digit',
+                      month: '2-digit', 
+                      year: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      timeZone: 'America/Mexico_City'
+                    })}</span>
                   </div>
                   <div className="flex gap-2">
                     <Button

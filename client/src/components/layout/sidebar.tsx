@@ -29,17 +29,35 @@ export function Sidebar({ onShowNotifications, onCreateOrder }: SidebarProps) {
   const { data: pendingTransfers = [] } = useQuery<any[]>({
     queryKey: ["/api/transfers/pending"],
     enabled: !!user,
+    refetchInterval: 10000, // Refetch cada 10 segundos
+    refetchOnWindowFocus: true,
   });
 
   const { data: repositionNotifications = [] } = useQuery({
-    queryKey: ["/api/repositions/notifications"],
+    queryKey: ["/api/notifications"],
     enabled: !!user,
+    refetchInterval: 10000, // Refetch cada 10 segundos
+    refetchOnWindowFocus: true,
     queryFn: async () => {
-      const res = await fetch('/api/repositions/notifications', {
+      const res = await fetch('/api/notifications', {
         credentials: 'include'
       });
       if (!res.ok) return [];
-      return await res.json();
+      const allNotifications = await res.json();
+      // Filtrar solo notificaciones de reposiciones no leídas
+      return allNotifications.filter((n: any) => 
+        !n.read && (
+          n.type?.includes('reposition') || 
+          n.type?.includes('completion') ||
+          n.type === 'new_reposition' ||
+          n.type === 'reposition_transfer' ||
+          n.type === 'reposition_approved' ||
+          n.type === 'reposition_rejected' ||
+          n.type === 'reposition_completed' ||
+          n.type === 'reposition_deleted' ||
+          n.type === 'completion_approval_needed'
+        )
+      );
     },
   });
 
@@ -89,7 +107,7 @@ export function Sidebar({ onShowNotifications, onCreateOrder }: SidebarProps) {
                 href={`msteams:/l/chat/0/0?users=${user?.username}`}
             >
             <button className="mt-2 px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
-              Mi Reporte
+              Chatear en Teams
             </button>
             </a>
 

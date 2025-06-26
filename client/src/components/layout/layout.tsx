@@ -1,7 +1,8 @@
 import { useState, ReactNode } from "react";
 import { Sidebar } from "./sidebar";
-import { CreateOrderModal } from "@/components/orders/create-order-modal";
 import { NotificationsPanel } from "@/components/notifications/notifications-panel";
+import { CreateOrderModal } from "@/components/orders/create-order-modal";
+import { useWebSocket } from "@/lib/websocket";
 import { useAuth } from "@/hooks/use-auth";
 import { ReportsPanel } from "../reports/ReportsPanel";
 
@@ -14,6 +15,9 @@ export function Layout({ children }: LayoutProps) {
   const [showCreateOrder, setShowCreateOrder] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showReports, setShowReports] = useState(false);
+
+  // Inicializar WebSocket para actualizaciones en tiempo real
+  useWebSocket();
 
   const canCreateOrders = user?.area === 'corte' || user?.area === 'admin';
 

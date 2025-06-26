@@ -312,12 +312,26 @@ export function RepositionDetail({
               </div>
               <div>
                 <p className="font-semibold text-gray-700">Fecha de Creación</p>
-                <p>{new Date(reposition.createdAt).toLocaleString()}</p>
+                <p>{new Date(reposition.createdAt).toLocaleString('es-ES', {
+                  day: '2-digit',
+                  month: '2-digit',
+                  year: 'numeric', 
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  timeZone: 'America/Mexico_City'
+                })}</p>
               </div>
               {reposition.approvedAt && (
                 <div>
                   <p className="font-semibold text-gray-700">Fecha de Aprobación</p>
-                  <p>{new Date(reposition.approvedAt).toLocaleString()}</p>
+                  <p>{new Date(reposition.approvedAt).toLocaleString('es-ES', {
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric',
+                    hour: '2-digit', 
+                    minute: '2-digit',
+                    timeZone: 'America/Mexico_City'
+                  })}</p>
                 </div>
               )}
             </CardContent>

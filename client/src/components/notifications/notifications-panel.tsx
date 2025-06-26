@@ -23,11 +23,27 @@ export function NotificationsPanel({ open, onClose }: NotificationsPanelProps) {
   });
 
   const { data: repositionNotifications = [] } = useQuery({
-    queryKey: ["/api/repositions/notifications"],
+    queryKey: ["/api/notifications"],
     enabled: open,
+    refetchInterval: 2000, // Refrescar cada 2 segundos cuando el panel está abierto
+    refetchIntervalInBackground: false,
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/repositions/notifications");
-      return await res.json();
+      const res = await apiRequest("GET", "/api/notifications");
+      const allNotifications = await res.json();
+      // Filtrar solo notificaciones de reposiciones no leídas
+      return allNotifications.filter((n: any) => 
+        !n.read && (
+          n.type?.includes('reposition') || 
+          n.type?.includes('completion') ||
+          n.type === 'new_reposition' ||
+          n.type === 'reposition_transfer' ||
+          n.type === 'reposition_approved' ||
+          n.type === 'reposition_rejected' ||
+          n.type === 'reposition_completed' ||
+          n.type === 'reposition_deleted' ||
+          n.type === 'completion_approval_needed'
+        )
+      );
     },
   });
 
@@ -76,6 +92,16 @@ export function NotificationsPanel({ open, onClose }: NotificationsPanelProps) {
     },
   });
 
+  const markNotificationReadMutation = useMutation({
+    mutationFn: async (notificationId: number) => {
+      const res = await apiRequest("POST", `/api/repositions/${notificationId}/read`);
+      return await res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
+    },
+  });
+
   const getAreaDisplayName = (area: string) => {
     const names: Record<string, string> = {
       corte: "Corte",
@@ -97,11 +123,26 @@ export function NotificationsPanel({ open, onClose }: NotificationsPanelProps) {
     const diffDays = Math.floor(diffHours / 24);
 
     if (diffDays > 0) {
-      return `Hace ${diffDays} día${diffDays > 1 ? "s" : ""}`;
+      return `Hace ${diffDays} día${diffDays > 1 ? "s" : ""} - ${date.toLocaleString('es-ES', { 
+        day: '2-digit', 
+        month: '2-digit', 
+        year: 'numeric',
+        hour: '2-digit', 
+        minute: '2-digit',
+        timeZone: 'America/Mexico_City'
+      })}`;
     } else if (diffHours > 0) {
-      return `Hace ${diffHours} hora${diffHours > 1 ? "s" : ""}`;
+      return `Hace ${diffHours} hora${diffHours > 1 ? "s" : ""} - ${date.toLocaleString('es-ES', { 
+        hour: '2-digit', 
+        minute: '2-digit',
+        timeZone: 'America/Mexico_City'
+      })}`;
     } else {
-      return "Hace unos minutos";
+      return `Hace unos minutos - ${date.toLocaleString('es-ES', { 
+        hour: '2-digit', 
+        minute: '2-digit',
+        timeZone: 'America/Mexico_City'
+      })}`;
     }
   };
 
@@ -113,6 +154,7 @@ export function NotificationsPanel({ open, onClose }: NotificationsPanelProps) {
         return <CheckCircle className="w-4 h-4 text-green-600" />;
       case 'order_created':
         return <Plus className="w-4 h-4 text-purple-600" />;
+      case 'new_reposition':
       case 'reposition_created':
         return <Plus className="w-4 h-4 text-purple-600" />;
       case 'reposition_approved':
@@ -123,6 +165,12 @@ export function NotificationsPanel({ open, onClose }: NotificationsPanelProps) {
         return <CheckCircle className="w-4 h-4 text-green-600" />;
       case 'reposition_deleted':
         return <Trash2 className="w-4 h-4 text-red-600" />;
+      case 'reposition_transfer':
+        return <ArrowRight className="w-4 h-4 text-blue-600" />;
+      case 'transfer_processed':
+        return <RefreshCw className="w-4 h-4 text-blue-600" />;
+      case 'reposition_received':
+        return <Package className="w-4 h-4 text-green-600" />;
       case 'completion_approval_needed':
         return <Clock className="w-4 h-4 text-yellow-600" />;
       default:
@@ -152,17 +200,12 @@ export function NotificationsPanel({ open, onClose }: NotificationsPanelProps) {
               {repositionNotifications.map((notification: any) => (
                 <div
                   key={notification.id}
-                  className="bg-white/80 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-md rounded-xl p-4 transition-all duration-300 ease-out hover:shadow-xl animate-fade-in"
+                  className="bg-white/80 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-md rounded-xl p-4 transition-all duration-300 ease-out hover:shadow-xl animate-fade-in cursor-pointer"
+                  onClick={() => markNotificationReadMutation.mutate(notification.id)}
                 >
                   <div className="flex items-start space-x-3">
                     <div className="w-9 h-9 bg-purple-100 rounded-full flex items-center justify-center">
-                      {notification.type === 'transfer' ? (
-                        <ArrowRight className="text-purple-600" size={18} />
-                      ) : notification.type === 'approval' ? (
-                        <CheckCircle className="text-purple-600" size={18} />
-                      ) : (
-                        <RefreshCw className="text-purple-600" size={18} />
-                      )}
+                      {getNotificationIcon(notification.type)}
                     </div>
                     <div className="flex-1">
                       <h4 className="font-semibold text-gray-800 dark:text-gray-100">
@@ -172,11 +215,20 @@ export function NotificationsPanel({ open, onClose }: NotificationsPanelProps) {
                         {notification.message}
                       </p>
                       <div className="flex items-center justify-between mt-2">
-                        <Badge variant="outline" className="text-xs">
-                          {notification.folio}
-                        </Badge>
+                        {notification.repositionId && (
+                          <Badge variant="outline" className="text-xs">
+                            Reposición #{notification.repositionId}
+                          </Badge>
+                        )}
                         <p className="text-xs text-gray-500">{formatDate(notification.createdAt)}</p>
                       </div>
+                      {notification.type === 'completion_approval_needed' && (
+                        <div className="mt-2 p-2 bg-yellow-50 rounded-lg border border-yellow-200">
+                          <p className="text-xs text-yellow-800 font-medium">
+                            Solicitud de finalización pendiente de aprobación
+                          </p>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
